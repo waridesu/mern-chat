@@ -8,6 +8,7 @@ const cors = require('cors');
 mongoose.connect(process.env.MONGO_URL);
 const jwtSecret = process.env.JWT_SECRET;
 const UserModel = require('./models/User');
+const MessageModel = require('./models/Message');
 const cookieParser = require('cookie-parser');
 const bcryptSalt = bcrypt.genSaltSync(10);
 const app = express();
@@ -17,6 +18,23 @@ app.use(cors({
     credentials: true,
     origin: process.env.CLIENT_URL,
 }));
+
+async function getUserDataFromToken(req) {
+    return new Promise((resolve, reject) => {
+        const token = req.cookies?.token;
+        if (token) {
+            jwt.verify(token, jwtSecret, {}, (err, payload) => {
+                if (err) {
+                    throw err
+                }
+                resolve(payload);
+            });
+        } else {
+            reject('No token');
+        }
+    })
+
+}
 app.get('/test', (req, res) => {
     res.json('test ok');
 });
@@ -63,7 +81,6 @@ app.post('/register', async (req, res) => {
                 username,
                 password: hashedPassword
             });
-        console.log(createdUser);
         jwt.sign({userId: createdUser._id, username, password: createdUser.password}, jwtSecret, {}, (err, token) => {
             if (err) throw err;
             res.cookie('token', token, {sameSite: "none", secure: true}).status(201).json({
@@ -78,7 +95,20 @@ app.post('/register', async (req, res) => {
 const server = app.listen(4040)
 const wss = new ws.WebSocketServer({server});
 
+app.get('/messages/:userId', async (req, res) => {
+    const {userId} = req.params;
+    const userData = await getUserDataFromToken(req);
+    const ourUserId = userData.userId;
+    const msg = await MessageModel.find({
+        sender: [userId, ourUserId],
+        recipient: [userId, ourUserId]
+    }).sort({createdAt: 1})
+    res.json(msg);
+});
+
 wss.on('connection', (connection, req) => {
+
+    // read user name and id from the token
     const cookies = req.headers.cookie;
     if (cookies) {
         const tokenCookieString = cookies.split(';').find(str => str.startsWith('token=')).split('=')[1];
@@ -93,6 +123,7 @@ wss.on('connection', (connection, req) => {
             });
         }
     }
+    // notify all clients that a new user has connected
     [...wss.clients].forEach(client => {
         client.send(JSON.stringify(
             {
@@ -100,5 +131,28 @@ wss.on('connection', (connection, req) => {
 
             }
         ))
+    });
+
+    connection.on('message', async (message) => {
+        const msgData = JSON.parse(message.toString());
+        const {recipient, text} = msgData.message;
+        if (recipient && text) {
+            const MessageDoc = await MessageModel.create({
+                sender: connection.userId,
+                recipient,
+                text
+            });
+
+            [...wss.clients]
+                .filter(client => client.userId === recipient)
+                .forEach(client => {
+                    client.send(JSON.stringify({
+                        text,
+                        sender: connection.userId,
+                        recipient: MessageDoc.recipient,
+                        _id: MessageDoc._id,
+                    }))
+                })
+        }
     });
 });
