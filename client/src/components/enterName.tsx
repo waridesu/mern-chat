@@ -1,5 +1,5 @@
 import { useContext, useState } from "react";
-import axios from "axios";
+import axios, { AxiosResponse } from "axios";
 import { UserContext } from "./UserContext.tsx";
 
 export default function RegisterAndLoginForm() {
@@ -8,11 +8,18 @@ export default function RegisterAndLoginForm() {
     const [isLoginOrRegister, setIsLoginOrRegister] = useState('register')
     const {setUsername: setLoggedInUsername, setId} = useContext(UserContext)
 
-    async function handleSubmit(ev: any) {
+    async function handleSubmit(ev: React.FormEvent<HTMLFormElement>) {
         ev.preventDefault();
         const url = isLoginOrRegister === 'login' ? '/login' : '/register'
 
-        const {data} = await axios.post(url, {username, password})
+        let response: AxiosResponse;
+        try {
+            response = await axios.post(url, { username, password });
+        } catch (err) {
+            throw new Error(err as string);
+        }
+
+        const { data } = response;
         setLoggedInUsername(username)
         setId(data.id)
     }

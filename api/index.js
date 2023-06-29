@@ -11,9 +11,13 @@ const UserModel = require('./models/User');
 const MessageModel = require('./models/Message');
 const cookieParser = require('cookie-parser');
 const bcryptSalt = bcrypt.genSaltSync(10);
+const fs = require('fs');
+const crypto = require('crypto');
+
 const app = express();
 app.use(express.json());
 app.use(cookieParser())
+app.use('/uploads', express.static(__dirname + '/uploads'));
 app.use(cors({
     credentials: true,
     origin: process.env.CLIENT_URL,
@@ -21,7 +25,7 @@ app.use(cors({
 
 async function getUserDataFromToken(req) {
     return new Promise((resolve, reject) => {
-        const token = req.cookies?.token;
+        const {token} = req.cookies;
         if (token) {
             jwt.verify(token, jwtSecret, {}, (err, payload) => {
                 if (err) {
@@ -35,6 +39,7 @@ async function getUserDataFromToken(req) {
     })
 
 }
+
 app.get('/test', (req, res) => {
     res.json('test ok');
 });
@@ -71,7 +76,9 @@ app.post('/login', async (req, res) => {
         });
     });
 });
-
+app.post('/logout', (req, res) => {
+    res.cookie('token', '', {sameSite: 'none', secure: true, maxAge: 0}).status(200).json({message: 'ok'});
+})
 app.post('/register', async (req, res) => {
     const {username, password} = req.body;
     try {
@@ -88,7 +95,9 @@ app.post('/register', async (req, res) => {
             });
         })
     } catch (e) {
-        if (e) throw e
+        if (e.code === 11000)
+            return res.status(400).json({message: 'Username already exists'});
+        throw e;
     }
 });
 
@@ -100,13 +109,46 @@ app.get('/messages/:userId', async (req, res) => {
     const userData = await getUserDataFromToken(req);
     const ourUserId = userData.userId;
     const msg = await MessageModel.find({
-        sender: [userId, ourUserId],
-        recipient: [userId, ourUserId]
+        sender: {$in: [userId, ourUserId]},
+        recipient: {$in: [userId, ourUserId]}
     }).sort({createdAt: 1})
     res.json(msg);
 });
-
+app.get('/people', async (req, res) => {
+    const users = await UserModel.find({}, {'_id': true, 'username': true})
+    res.json(users);
+});
 wss.on('connection', (connection, req) => {
+
+    function notifyAboutOnlinePeople() {
+        // notify all clients that a new user has connected
+        [...wss.clients].forEach(client => {
+            client.send(JSON.stringify(
+                {
+                    online: [...wss.clients].map(c => ({userId: c.userId, username: c.username}))
+
+                }
+            ))
+        });
+    }
+
+    connection.isAlive = true;
+
+    connection.timer = setInterval(() => {
+        connection.ping();
+
+        connection.deathTimer = setTimeout(() => {
+            connection.isAlive = false;
+            clearInterval(connection.timer)
+            connection.terminate()
+            notifyAboutOnlinePeople();
+            console.log('dead');
+        }, 1000);
+    }, 5000);
+
+    connection.on('pong', () => {
+        clearTimeout(connection.deathTimer);
+    });
 
     // read user name and id from the token
     const cookies = req.headers.cookie;
@@ -133,14 +175,29 @@ wss.on('connection', (connection, req) => {
         ))
     });
 
+    notifyAboutOnlinePeople();
+
     connection.on('message', async (message) => {
         const msgData = JSON.parse(message.toString());
-        const {recipient, text} = msgData.message;
-        if (recipient && text) {
+        const {recipient, text, file} = msgData.message;
+        let fileName = null;
+        if (file) {
+            const parts = file.name.split('.');
+            const ext = parts[parts.length - 1];
+            fileName = `${crypto.randomUUID()}.${ext}`;
+            const filePath = __dirname + '/uploads/' + fileName;
+            const bufferData = Buffer.from(file.data.split(',')[1], 'base64');
+            fs.writeFile(filePath, bufferData, () => {
+                console.log('File saved:', filePath);
+            });
+        }
+
+        if (recipient && (text || file)) {
             const MessageDoc = await MessageModel.create({
                 sender: connection.userId,
                 recipient,
-                text
+                text,
+                file: file ? fileName : null
             });
 
             [...wss.clients]
@@ -150,6 +207,7 @@ wss.on('connection', (connection, req) => {
                         text,
                         sender: connection.userId,
                         recipient: MessageDoc.recipient,
+                        file: file ? fileName : null,
                         _id: MessageDoc._id,
                     }))
                 })
