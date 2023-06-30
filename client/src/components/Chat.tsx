@@ -2,14 +2,20 @@ import { useContext, useEffect, useRef, useState } from "react";
 import { UserContext } from "./UserContext.tsx";
 import axios from "axios";
 import Contact from "./Contact.tsx";
-
+interface IMessage {
+    _id: string;
+    text: string;
+    sender: string;
+    recipient: string;
+    file?: string;
+}
 export default function Chat() {
     const [ws, setWs] = useState<WebSocket | null>(null)
-    const [onlinePeople, setOnlinePeople] = useState<{ _id: string; userId: string; username: string; }[] | null>(null)
+    const [onlinePeople, setOnlinePeople] = useState<{ userId: string; username: string; }[] | null>(null)
     const [offlinePeople, setOfflinePeople] = useState<{ _id: string; username: string; }[] | null>(null)
     const [selectedUserId, setSelectedUserId] = useState<string | null>(null)
     const [newMsg, setNewMsg] = useState<string>('')
-    const [messages, setMessages] = useState<{ _id?: string; text: string; sender: string; recipient: string, file?: string }[]>([])
+    const [messages, setMessages] = useState<IMessage[]>([])
     const {username, id, setId, setUsername} = useContext(UserContext)
     const messagesContainer = useRef<HTMLDivElement>(null);
     const lastEl = useRef<HTMLDivElement>(null);
@@ -20,17 +26,17 @@ export default function Chat() {
 
     useEffect(() => {
         const el = lastEl.current
-        if (el) {
-            el.scrollIntoView({behavior: 'smooth'})
-        }
+        setTimeout(() => {
+            el?.scrollIntoView()
+        }, 500)
     }, [messages])
 
     useEffect(() => {
         axios.get('/people').then(({data}: { data: { _id: string; username: string }[] }) => {
+            console.log('data', data);
             const OfflinePeople = data.filter(
                 p => p._id !== id && !onlinePeople?.some(op => op.userId === p._id)
             );
-
             setOfflinePeople(OfflinePeople)
         })
     }, [onlinePeople])
@@ -55,8 +61,8 @@ export default function Chat() {
         });
     }
 
-    function showOnlinePeople(peopleArray: { _id: string; userId: string, username: string }[]) {
-        const people = peopleArray.reduce((acc: { _id: string; userId: string; username: string; }[], obj) => {
+    function showOnlinePeople(peopleArray: { userId: string, username: string }[]) {
+        const people = peopleArray.reduce((acc: { userId: string; username: string; }[], obj) => {
             const existingObj = acc?.find(item => item.userId === obj.userId);
             if (!existingObj) acc.push(obj);
             return acc;
@@ -69,11 +75,8 @@ export default function Chat() {
         if ('online' in msgData) {
             showOnlinePeople(msgData.online)
         } else if ('text' in msgData) {
-            if(msgData.sender ===  selectedUserId) {
-                setMessages(prev => [...prev, {...msgData}]
-                )
-            }
-
+            setMessages(prev => [...prev, {...msgData}]
+            )
         }
     }
 
@@ -81,7 +84,7 @@ export default function Chat() {
         e.preventDefault()
         ws?.send(JSON.stringify({
             message:
-                {recipient: selectedUserId, sender:id, text: newMsg}
+                {recipient: selectedUserId, sender: id, text: newMsg}
         }))
         setNewMsg('');
         if (id && selectedUserId) {
@@ -113,13 +116,13 @@ export default function Chat() {
                 data: reader.result
             };
             ws?.send(JSON.stringify({
-                message: { recipient: selectedUserId, text: newMsg, file }
+                message: {recipient: selectedUserId, text: newMsg, file}
             }));
             setNewMsg('');
             if (id && selectedUserId) {
                 setMessages(prev => ([
                     ...prev,
-                    { id: crypto.randomUUID(), text: newMsg, sender: id, recipient: selectedUserId }
+                    {_id: crypto.randomUUID(), text: newMsg, sender: id, recipient: selectedUserId}
                 ]));
             }
             if (file) {
@@ -136,7 +139,7 @@ export default function Chat() {
             <div style={{display: "flex", height: "100%"}}>
                 <div style={{width: "25%", backgroundColor: "red"}}>
                     <div>
-                        {onlinePeople?.filter(({userId}) => userId !== id)?.map((person) =>
+                        {onlinePeople && onlinePeople.filter(({userId}) => userId !== id)?.map((person) =>
                             <Contact
                                 key={person.userId}
                                 id={person.userId}
@@ -146,7 +149,7 @@ export default function Chat() {
                                 setSelectedUserId={() => setSelectedUserId(person.userId)}
                             />
                         )}
-                        {offlinePeople?.map((person) =>
+                        {offlinePeople && offlinePeople?.map((person) =>
                             <Contact
                                 key={person._id}
                                 id={person._id}
@@ -192,7 +195,8 @@ export default function Chat() {
                                 >{sender === id ? 'myText:' : ''}
                                     {text}
                                     {file &&
-                                        <img style={{display: "flex", maxWidth: "400px"}} src={axios.defaults.baseURL + '/uploads/'+ file} alt={'file'}></img>
+                                        <img style={{display: "flex", maxWidth: "400px"}}
+                                             src={axios.defaults.baseURL + '/uploads/' + file} alt={'file'}></img>
                                     }
                                 </div>
                             )}
@@ -204,7 +208,7 @@ export default function Chat() {
                         <input
                             value={newMsg}
                             onChange={(e) => setNewMsg(e.target.value)}
-                            style={{flexGrow: "1", backgroundColor: "white"}} type="text"/>
+                            style={{flexGrow: "1", backgroundColor: "white", color: '#000'}} type="text"/>
                         <label style={{
                             width: '40px',
                             cursor: "pointer",
