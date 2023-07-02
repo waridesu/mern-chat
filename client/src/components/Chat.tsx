@@ -2,6 +2,8 @@ import { useContext, useEffect, useRef, useState } from "react";
 import { UserContext } from "./UserContext.tsx";
 import axios from "axios";
 import Contact from "./Contact.tsx";
+import io, { Socket } from "socket.io-client";
+
 interface IMessage {
     _id: string;
     text: string;
@@ -9,8 +11,9 @@ interface IMessage {
     recipient: string;
     file?: string;
 }
+
 export default function Chat() {
-    const [ws, setWs] = useState<WebSocket | null>(null)
+    const [socket, setSocket] = useState<Socket | null>(null);
     const [onlinePeople, setOnlinePeople] = useState<{ userId: string; username: string; }[] | null>(null)
     const [offlinePeople, setOfflinePeople] = useState<{ _id: string; username: string; }[] | null>(null)
     const [selectedUserId, setSelectedUserId] = useState<string | null>(null)
@@ -21,7 +24,7 @@ export default function Chat() {
     const lastEl = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
-        connectToWebSocket()
+        connectToSocketIO()
     }, [])
 
     useEffect(() => {
@@ -49,16 +52,27 @@ export default function Chat() {
         }
     }, [selectedUserId])
 
-    function connectToWebSocket() {
-        const ws = new WebSocket("ws://localhost:4040")
-        setWs(ws);
-        ws.addEventListener('message', handleMessages);
-        ws.addEventListener('close', () => {
-            setTimeout(() => {
-                console.log('Disconnected. Trying to reconnect');
-                connectToWebSocket()
-            }, 1000)
+    function connectToSocketIO() {
+        const socketIOClient = io("http://localhost:4040");
+        socketIOClient.on('connect', () => {
+            console.log('Connected to Socket.IO server');
         });
+
+        socketIOClient.on('message', handleMessages);
+
+        socketIOClient.on('disconnect', () => {
+            console.log('Disconnected. Trying to reconnect');
+            setTimeout(() => {
+                connectToSocketIO();
+            }, 1000);
+        });
+        setSocket(socketIOClient);
+
+
+        // Cleanup on unmounting
+        return () => {
+            socketIOClient.disconnect();
+        };
     }
 
     function showOnlinePeople(peopleArray: { userId: string, username: string }[]) {
@@ -71,7 +85,9 @@ export default function Chat() {
     }
 
     function handleMessages(e: MessageEvent) {
+        console.log('message', e);
         const msgData = JSON.parse(e.data)
+        console.log(msgData);
         if ('online' in msgData) {
             showOnlinePeople(msgData.online)
         } else if ('text' in msgData) {
@@ -82,10 +98,7 @@ export default function Chat() {
 
     function sendMessage(e: React.FormEvent<HTMLFormElement>) {
         e.preventDefault()
-        ws?.send(JSON.stringify({
-            message:
-                {recipient: selectedUserId, sender: id, text: newMsg}
-        }))
+        socket?.emit('message',{recipient: selectedUserId, text: newMsg, id });
         setNewMsg('');
         if (id && selectedUserId) {
             setMessages(perv =>
@@ -96,7 +109,7 @@ export default function Chat() {
 
     function Logout() {
         axios.post('/logout').then(() => {
-            setWs(null);
+            setSocket(null)
             setId(null)
             setUsername(null)
         })
@@ -115,9 +128,7 @@ export default function Chat() {
                 name: inputFile.name,
                 data: reader.result
             };
-            ws?.send(JSON.stringify({
-                message: {recipient: selectedUserId, text: newMsg, file}
-            }));
+            socket?.emit('message',{recipient: selectedUserId, text: newMsg, file});
             setNewMsg('');
             if (id && selectedUserId) {
                 setMessages(prev => ([
