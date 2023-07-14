@@ -1,39 +1,19 @@
-const jwt = require('jsonwebtoken');
 const fs = require('fs');
 const crypto = require('crypto');
 const MessageModel = require('./models/Message');
-const jwtSecret = process.env.JWT_SECRET;
+const users = new Map();
 
 function setupSocketIoServer(server) {
-    const io = require('socket.io')(server, {cors: {origin: "*"}});
+    const io = require('socket.io')(server, {cookie: true, cors: {origin: "*"}});
 
-
-    io.on('connection', (socket) => {
-
-        function notifyAboutOnlinePeople() {
-            // notify all clients that a new user has connected
-            socket.broadcast.emit('online', {
-                online: Array.from(io.sockets.sockets.values()).map(s => ({userId: s.userId, username: s.username}))
-            });
+    io.use((socket, next) => {
+        const id = socket.request._query.id
+        if (id) {
+            users.set(id, socket.id);
         }
-
-        // read user name and id from the token
-        const cookies = socket.handshake.headers.cookie;
-        if (cookies) {
-            const tokenCookieString = cookies.split(';').find(str => str.startsWith('token=')).split('=')[1];
-            if (tokenCookieString) {
-                jwt.verify(tokenCookieString, jwtSecret, {}, (err, payload) => {
-                    if (err) {
-                        throw err;
-                    }
-                    const {userId, username} = payload;
-                    socket.userId = userId;
-                    socket.username = username;
-                });
-            }
-        }
-
-        notifyAboutOnlinePeople();
+        next();
+    }).on('connection', (socket) => {
+        socket.emit('online', [...users.keys()]);
 
         socket.on('message', async (message) => {
             const {recipient, text, file, id} = message;
@@ -56,10 +36,9 @@ function setupSocketIoServer(server) {
                     text,
                     file: file ? fileName : null
                 });
-                console.log(socket.client, id);
-
+                console.log(users)
                 // i send by userId that i get from websocket but i dont know how to do it in socket.io because they have other id
-                socket.emit('message', {
+                io.to(users.get(recipient)).emit('message', {
                     text,
                     sender: id,
                     recipient: MessageDoc?.recipient,
@@ -70,7 +49,6 @@ function setupSocketIoServer(server) {
         });
 
         socket.on('disconnect', () => {
-            notifyAboutOnlinePeople();
         });
     });
 }

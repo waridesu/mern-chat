@@ -11,10 +11,20 @@ interface IMessage {
     recipient: string;
     file?: string;
 }
+function isIMessage(obj: any): obj is IMessage {
+    return (
+        obj &&
+        typeof obj._id === 'string' &&
+        typeof obj.text === 'string' &&
+        typeof obj.sender === 'string' &&
+        typeof obj.recipient === 'string' &&
+        (typeof obj.file === 'string' || obj.file === null || typeof obj.file === 'undefined')
+    );
+}
 
 export default function Chat() {
     const [socket, setSocket] = useState<Socket | null>(null);
-    const [onlinePeople, setOnlinePeople] = useState<{ userId: string; username: string; }[] | null>(null)
+    const [onlinePeople, setOnlinePeople] = useState<{ _id: string; username: string; }[] | null>(null)
     const [offlinePeople, setOfflinePeople] = useState<{ _id: string; username: string; }[] | null>(null)
     const [selectedUserId, setSelectedUserId] = useState<string | null>(null)
     const [newMsg, setNewMsg] = useState<string>('')
@@ -36,9 +46,8 @@ export default function Chat() {
 
     useEffect(() => {
         axios.get('/people').then(({data}: { data: { _id: string; username: string }[] }) => {
-            console.log('data', data);
             const OfflinePeople = data.filter(
-                p => p._id !== id && !onlinePeople?.some(op => op.userId === p._id)
+                p => p._id !== id && !onlinePeople?.some(op => op._id === p._id)
             );
             setOfflinePeople(OfflinePeople)
         })
@@ -53,12 +62,14 @@ export default function Chat() {
     }, [selectedUserId])
 
     function connectToSocketIO() {
-        const socketIOClient = io("http://localhost:4040");
+        const socketIOClient = io("http://localhost:4040",{query: {id}});
+
         socketIOClient.on('connect', () => {
-            console.log('Connected to Socket.IO server');
+            console.log('Connected');
         });
 
         socketIOClient.on('message', handleMessages);
+        socketIOClient.on('online', showOnlinePeople);
 
         socketIOClient.on('disconnect', () => {
             console.log('Disconnected. Trying to reconnect');
@@ -75,24 +86,14 @@ export default function Chat() {
         };
     }
 
-    function showOnlinePeople(peopleArray: { userId: string, username: string }[]) {
-        const people = peopleArray.reduce((acc: { userId: string; username: string; }[], obj) => {
-            const existingObj = acc?.find(item => item.userId === obj.userId);
-            if (!existingObj) acc.push(obj);
-            return acc;
-        }, []);
-        setOnlinePeople(people)
+    function showOnlinePeople(peopleArray: string[]) {
+            const online = offlinePeople?.filter(p => peopleArray.some(op => op === p._id));
+            setOnlinePeople(online as { _id: string; username: string; }[])
     }
 
-    function handleMessages(e: MessageEvent) {
-        console.log('message', e);
-        const msgData = JSON.parse(e.data)
-        console.log(msgData);
-        if ('online' in msgData) {
-            showOnlinePeople(msgData.online)
-        } else if ('text' in msgData) {
-            setMessages(prev => [...prev, {...msgData}]
-            )
+    function handleMessages(message: IMessage| { userId: string, username: string }[]) {
+        if(isIMessage(message)) {
+            setMessages(prev => [...prev, {...message}])
         }
     }
 
@@ -150,14 +151,14 @@ export default function Chat() {
             <div style={{display: "flex", height: "100%"}}>
                 <div style={{width: "25%", backgroundColor: "red"}}>
                     <div>
-                        {onlinePeople && onlinePeople.filter(({userId}) => userId !== id)?.map((person) =>
+                        {onlinePeople && onlinePeople.filter(({_id}) => _id !== id)?.map((person) =>
                             <Contact
-                                key={person.userId}
-                                id={person.userId}
+                                key={person._id}
+                                id={person._id}
                                 username={person.username}
                                 selectedUserId={selectedUserId ? selectedUserId : null}
                                 online={true}
-                                setSelectedUserId={() => setSelectedUserId(person.userId)}
+                                setSelectedUserId={() => setSelectedUserId(person._id)}
                             />
                         )}
                         {offlinePeople && offlinePeople?.map((person) =>
